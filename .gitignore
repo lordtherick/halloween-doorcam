@@ -1,3 +1,10 @@
 cache/*
 audio_cache/*
 scratch/*
+
+.env
+.env.bak
+
+__pycache__
+.venv
+
