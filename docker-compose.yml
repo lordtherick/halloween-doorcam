@@ -1,0 +1,34 @@
+services:
+  doorcam:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: halloween-doorcam
+    restart: unless-stopped
+    env_file:
+      - .env
+    devices:
+      # Video capture device (mapped from CAMERA_DEVICE in .env, defaults to /dev/video2)
+      - "${CAMERA_DEVICE:-/dev/video2}:${CAMERA_DEVICE:-/dev/video2}"
+      # Sound devices for microphone input and speaker output (ALSA)
+      - "/dev/snd:/dev/snd"
+    group_add:
+      - audio
+      - video
+    # Allows container to reach local host services (e.g., local Ollama on host.docker.internal:11434)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Persist Whisper and huggingface/torch model cache across container rebuilds
+      - ./cache:/root/.cache
+      # Mount script and riddles for faster iteration without requiring full rebuild
+      - ./doorcam.py:/app/doorcam.py
+      - ./spooky_fx.py:/app/spooky_fx.py
+      - ./riddles.txt:/app/riddles.txt
+      - ./generate_fx.py:/app/generate_fx.py
+      # Persist generated and cached TTS audio files
+      - ./audio_cache:/app/audio_cache
+      # Mount PulseAudio/PipeWire socket for Bluetooth and host audio routing
+      - "${PULSE_SOCKET:-/run/user/1000/pulse/native}:/tmp/pulse-socket"
+    # Uncomment network_mode if you prefer native host networking on Linux:
+    # network_mode: "host"

@@ -1,0 +1,7 @@
+opencv-python-headless>=4.8.0
+SpeechRecognition>=3.10.0
+PyAudio>=0.2.14
+openai-whisper>=20231117
+ollama>=0.3.0
+edge-tts>=6.1.9
+python-dotenv>=1.0.0
