@@ -1,0 +1,13 @@
+# 💀 Halloween Skeleton Greetings Pool
+# Add one greeting per line. The skeleton service will randomly pick
+# from this deck without repeating until all greetings have been played.
+
+Clickity-clack! Welcome to my boneyard, little mortal! Do you have a trick or a treat for this old skeleton? Tell me a riddle if you dare!
+Rattle, rattle! Happy Halloween! My old bones are itching for a laugh! Do you have a trick, a treat, or a spooky riddle for me?
+Clack, clack, clack! Greetings from the crypt, young trick-or-treater! Have you brought a trick or a treat? Give this skeleton your best riddle!
+Well shiver my timbers and rattle my ribs! Happy Halloween! Do you have a trick or a treat? Ask me a riddle and see if my hollow skull can guess it!
+Brrr, it is chilly when you have no skin! Welcome, little monster! Do you have a trick or a treat for me today?
+Ah, a visitor at my doorstep! Careful, do not trip over my funny bone! Do you have a trick or a treat? Hit me with your best Halloween riddle!
+Spooky greetings, creature of the night! I am all bones and brains tonight! Do you have a trick or treat, or a riddle to test my skull?
+Click-clack! Who rattles at my door? Happy Halloween! Tell me, do you have a trick or a treat?
+

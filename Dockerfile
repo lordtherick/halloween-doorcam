@@ -28,6 +28,6 @@ ARG DEFAULT_WHISPER_MODEL=base
 RUN python3 -c "import whisper; whisper.load_model('${DEFAULT_WHISPER_MODEL}')"
 
 # Copy application source code and riddles
-COPY doorcam.py spooky_fx.py generate_fx.py riddles.txt ./
+COPY doorcam.py skeleton_service.py spooky_fx.py generate_fx.py riddles.txt greetings.txt skeleton_greetings.txt ./
 
 CMD ["python3", "doorcam.py"]

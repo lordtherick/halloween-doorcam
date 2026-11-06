@@ -6,11 +6,13 @@
 *.key
 *.cert
 
-# Cache & Temporary Audio Files
+# Cache, Detected Frames & Temporary Audio Files
 audio_cache/
 cache/
 scratch/
+detected_frames/
 temp_mic.wav
+temp_skeleton_mic.wav
 *.tmp.mp3
 *.wav.tmp
 

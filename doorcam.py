@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-🎃 Halloween Doorcam - Interactive AI Trick-or-Treat Sentinel
-============================================================
-Autonomous Halloween doorstep sentinel that watches for approaching trick-or-treaters
+💀 Halloween Doorcam - Interactive AI Skeleton Trick-or-Treat Sentinel
+======================================================================
+Autonomous Halloween doorstep skeleton sentinel that watches for approaching trick-or-treaters
 via webcam motion detection, awakens with atmospheric sound effects, generates playful
 Halloween riddles using a local Ollama LLM, listens and transcribes children's answers
 using OpenAI Whisper, and judges their answers to reward candy or playfully tease them.
@@ -13,10 +13,10 @@ System Architecture:
    - Headless background subtraction (frame differencing + contour analysis via OpenCV).
    - Cooldown period and frame-buffer flushing post-interaction to avoid feedback loops.
 2. Spooky Audio FX & Atmosphere:
-   - Plays atmospheric stingers (gargoyle awakening, gothic bells, magical treasure chimes,
+   - Plays atmospheric stingers (skeleton awakening, gothic bells, magical treasure chimes,
      dungeon failure gongs, haunted winds) using `spooky_fx.py`.
 3. Speech Synthesis (TTS):
-   - High-quality, low-pitch British or American voices via Microsoft Edge-TTS.
+   - High-quality British or American skeleton voices via Microsoft Edge-TTS.
    - Deterministic SHA-256 disk caching to provide instantaneous audio playback.
 4. Speech Recognition (STT):
    - PyAudio microphone capture with ambient noise calibration and energy threshold clamps.
@@ -36,6 +36,7 @@ import argparse
 import subprocess
 import wave
 import difflib
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple, Dict, Any, List
 from contextlib import contextmanager
@@ -130,6 +131,9 @@ TTS_PITCH = os.getenv("TTS_PITCH", "-15Hz")
 # --- Video Motion Detection Settings ---
 MOTION_THRESHOLD = int(os.getenv("MOTION_THRESHOLD", "5000"))
 MOTION_COOLDOWN = int(os.getenv("MOTION_COOLDOWN", "15"))
+MOTION_LOG_INTERVAL = float(os.getenv("MOTION_LOG_INTERVAL", "2.0"))
+SAVE_DETECTED_FRAMES = os.getenv("SAVE_DETECTED_FRAMES", "true").lower() in ("true", "1", "yes")
+DETECTED_FRAMES_DIR = Path(os.getenv("DETECTED_FRAMES_DIR", "detected_frames"))
 
 # --- Speech Recognition Timing & Sensitivity ---
 AMBIENT_NOISE_DURATION = float(os.getenv("AMBIENT_NOISE_DURATION", "0.8"))
@@ -138,11 +142,25 @@ LISTEN_PHRASE_TIME_LIMIT = int(os.getenv("LISTEN_PHRASE_TIME_LIMIT", "15"))
 PAUSE_THRESHOLD = float(os.getenv("PAUSE_THRESHOLD", "2.0"))
 ENERGY_THRESHOLD = int(os.getenv("ENERGY_THRESHOLD", "300"))
 DYNAMIC_ENERGY_THRESHOLD = os.getenv("DYNAMIC_ENERGY_THRESHOLD", "false").lower() in ("true", "1", "yes")
-PRE_LISTEN_DELAY = float(os.getenv("PRE_LISTEN_DELAY", "0.8"))
+PRE_LISTEN_DELAY = float(os.getenv("PRE_LISTEN_DELAY", "0.2"))
 
 # --- Script Paths & Riddles Configuration ---
 SCRIPT_DIR = Path(__file__).resolve().parent
 RIDDLES_FILE = Path(os.getenv("RIDDLES_FILE", SCRIPT_DIR / "riddles.txt"))
+GREETINGS_FILE = Path(os.getenv("GREETINGS_FILE", SCRIPT_DIR / "greetings.txt"))
+
+DEFAULT_GREETINGS: List[str] = [
+    "Clickity-clack! Welcome, foolish mortals, to my haunted boneyard! Answer this skeleton's riddle if you dare!",
+    "Rattle, rattle! Halt! Who goes there? Before you take a sweet, you must solve my spooky skeleton riddle!",
+    "Happy Halloween, brave trick-or-treaters! Answer my bony riddle, and the candy is yours!",
+    "Clack, clack, clack! Welcome to my crypt, little monsters! Let us see if you can solve this skeleton's Halloween riddle!",
+    "Greetings, creatures of the night! My old bones are rattling for a puzzle... heed my riddle!",
+    "Well shiver my ribs! Fresh souls approach! Solve my riddle if you wish to taste the candy within!",
+    "Welcome, ghosts and ghouls! Do not trip over my funny bone! Listen closely to my riddle to earn your sweet reward!",
+    "Who dares rattle the skeleton guardian of the treat bowl? Answer my riddle to pass!",
+    "Happy Halloween, wanderers of the dark! Answer this old skeleton's riddle, or face a frightful trick!",
+    "Beware, little goblins! Solve the riddle inside my hollow skull, and sweet treasures shall be yours!"
+]
 
 DEFAULT_RIDDLES: List[Dict[str, str]] = [
     {
@@ -356,6 +374,49 @@ def get_next_riddle() -> Dict[str, str]:
     return _riddle_deck.pop()
 
 
+def load_greetings(file_path: Optional[Path] = None) -> List[str]:
+    """
+    Load Halloween greetings from greetings.txt, falling back to DEFAULT_GREETINGS.
+    """
+    path = file_path or GREETINGS_FILE
+    greetings: List[str] = []
+    if path.exists() and path.stat().st_size > 0:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith(("#", "//")):
+                        greetings.append(line)
+        except Exception as e:
+            print(f"Warning: Could not read greetings from {path}: {e}")
+
+    if not greetings:
+        greetings = list(DEFAULT_GREETINGS)
+    return greetings
+
+
+_greetings_deck: List[str] = []
+_last_greetings_mtime: float = 0.0
+
+
+def get_next_greeting() -> str:
+    """
+    Retrieve the next Halloween greeting using a non-repeating shuffle deck.
+    Randomly selects across greetings, automatically reloading if greetings.txt
+    is edited on disk.
+    """
+    global _greetings_deck, _last_greetings_mtime
+    file_mtime = GREETINGS_FILE.stat().st_mtime if GREETINGS_FILE.exists() else 0.0
+
+    if not _greetings_deck or file_mtime > _last_greetings_mtime:
+        loaded = load_greetings()
+        _greetings_deck = list(loaded)
+        random.shuffle(_greetings_deck)
+        _last_greetings_mtime = file_mtime
+
+    return _greetings_deck.pop()
+
+
 def format_failure_message(template: str, answer: str) -> str:
     """
     Format the failure message with the riddle answer and ensure scary costumes/sweets are credited.
@@ -374,16 +435,19 @@ def format_failure_message(template: str, answer: str) -> str:
 # --- Dialogue & Costume Reward Prompts ---
 CORRECT_ANSWER_MESSAGE = os.getenv(
     "CORRECT_ANSWER_MESSAGE",
-    "You are clever, mortal. You may take a sweet from the bowl."
+    "Clickity-clack! You are clever, mortal! You tickled my funny bone—you may take a sweet from the bowl!"
 )
-DEFAULT_WRONG_ANSWER = "Wrong! The answer was {answer}. But because you wear such a scary costume, you may take a sweet from the bowl anyway!"
-DEFAULT_SILENT_ANSWER = "You are silent! The answer was {answer}. But because you wear such a scary costume, you may take a sweet from the bowl!"
+DEFAULT_WRONG_ANSWER = "Rattle my ribs, not quite! The answer was {answer}. But because you wear such a scary costume, you may take a sweet from the bowl anyway!"
+DEFAULT_GIVE_UP_ANSWER = "Stumped your hollow skull, did I? Clickity-clack! The answer was {answer}. Because you wear such a scary costume, you may take a sweet from the bowl anyway!"
+DEFAULT_SILENT_ANSWER = "Cat got your tongue, or did my rattling bones scare you? The answer was {answer}. Because you wear such a scary costume, you may take a sweet from the bowl!"
 
 _raw_wrong = os.getenv("WRONG_ANSWER_MESSAGE", DEFAULT_WRONG_ANSWER)
 if "hidden in the shadows" in _raw_wrong:
     WRONG_ANSWER_TEMPLATE = DEFAULT_WRONG_ANSWER
 else:
     WRONG_ANSWER_TEMPLATE = _raw_wrong
+
+GIVE_UP_ANSWER_TEMPLATE = os.getenv("GIVE_UP_ANSWER_MESSAGE", DEFAULT_GIVE_UP_ANSWER)
 
 _raw_silent = os.getenv("SILENT_ANSWER_MESSAGE", DEFAULT_SILENT_ANSWER)
 if "no sweets for ghosts" in _raw_silent:
@@ -513,38 +577,84 @@ def normalize_audio(wav_path: str, target_peak: float = 0.90) -> None:
         print(f"Audio normalization notice: {e}")
 
 
-# Global ML model singletons (initialized on startup in init_ml_models)
+# Global ML model and hardware singletons (initialized on startup in init_ml_models)
 ollama_client = None
 MODEL = OLLAMA_MODEL
 whisper_model = None
 recognizer = None
+_cached_mic_idx = None
+_cached_mic_name = "System Default"
+_mic_calibrated = False
 
 
 def init_ml_models() -> None:
     """
-    Initialize and pre-load machine learning models into memory.
+    Initialize and pre-load machine learning models into memory, resolve microphone,
+    and calibrate ambient noise.
 
-    Connects to the Ollama server for LLM riddle generation and loads the OpenAI
+    Connects to the Ollama server for riddle evaluation and loads the OpenAI
     Whisper speech-to-text model on the CPU/GPU. Doing this during startup avoids
     delays during trick-or-treater interactions.
-
-    Returns:
-        None
-
-    Example:
-        >>> init_ml_models()
-        Connecting to Ollama at: http://host.docker.internal:11434...
-        Loading Whisper model 'base'...
     """
     global ollama_client, whisper_model, recognizer, MODEL
-    if ollama_client is None:
-        print(f"Connecting to Ollama at: {OLLAMA_HOST} (Model: {OLLAMA_MODEL})")
-        ollama_client = Client(host=OLLAMA_HOST)
-        MODEL = OLLAMA_MODEL
-    if whisper_model is None:
+    global _cached_mic_idx, _cached_mic_name, _mic_calibrated
+
+    if ollama_client is None and Client:
+        hosts_to_try = [OLLAMA_HOST]
+        if "host.docker.internal" in OLLAMA_HOST:
+            hosts_to_try.append("http://localhost:11434")
+        elif "localhost" in OLLAMA_HOST or "127.0.0.1" in OLLAMA_HOST:
+            hosts_to_try.append("http://host.docker.internal:11434")
+
+        for h in hosts_to_try:
+            try:
+                candidate = Client(host=h)
+                candidate.tags()
+                ollama_client = candidate
+                MODEL = OLLAMA_MODEL
+                print(f"Connected to Ollama at: {h} (Model: {MODEL})")
+                break
+            except Exception:
+                continue
+
+        if ollama_client is None:
+            print(f"Notice: Could not connect to Ollama at {hosts_to_try}. Rule-based evaluation will be used.")
+
+    if whisper_model is None and whisper:
         print(f"Loading Whisper model '{WHISPER_MODEL_NAME}'...")
         whisper_model = whisper.load_model(WHISPER_MODEL_NAME)
         recognizer = sr.Recognizer()
+
+    # Pre-resolve microphone device once at startup
+    if _cached_mic_idx is None:
+        idx = int(MIC_DEVICE_INDEX) if (MIC_DEVICE_INDEX and MIC_DEVICE_INDEX.isdigit()) else None
+        name = "System Default"
+        if idx is None:
+            idx, name = find_microphone_index(AUDIO_INPUT_DEVICE)
+        elif sr:
+            with suppress_c_stderr():
+                names = sr.Microphone.list_microphone_names()
+                if 0 <= idx < len(names):
+                    name = names[idx]
+        _cached_mic_idx = idx
+        _cached_mic_name = name
+        print(f"Resolved microphone: [{_cached_mic_idx}] {_cached_mic_name}")
+
+    # Pre-calibrate ambient background noise once at startup
+    if sr and recognizer and not _mic_calibrated and AMBIENT_NOISE_DURATION > 0:
+        try:
+            print(f"Pre-calibrating ambient background noise ({AMBIENT_NOISE_DURATION}s)...")
+            with suppress_c_stderr():
+                with sr.Microphone(device_index=_cached_mic_idx) as source:
+                    recognizer.adjust_for_ambient_noise(source, duration=AMBIENT_NOISE_DURATION)
+                    if ENERGY_THRESHOLD > 0:
+                        recognizer.energy_threshold = min(max(recognizer.energy_threshold, 150), max(ENERGY_THRESHOLD, 600))
+                    else:
+                        recognizer.energy_threshold = min(recognizer.energy_threshold, 600)
+            _mic_calibrated = True
+            print(f"Calibrated microphone energy threshold: {int(recognizer.energy_threshold)}")
+        except Exception as e:
+            print(f"Notice: Initial ambient noise calibration skipped ({e})")
 
 
 def get_cached_audio_path(text: str, voice: str = None, rate: str = None, pitch: str = None) -> Path:
@@ -649,9 +759,12 @@ def warm_audio_cache() -> None:
         >>> warm_audio_cache()
     """
     phrases = [
-        "I am listening. What is your answer?",
         CORRECT_ANSWER_MESSAGE,
     ]
+    for g in load_greetings():
+        if g not in phrases:
+            phrases.append(g)
+
     riddles = load_riddles()
     for r in riddles:
         q = r["question"]
@@ -660,6 +773,9 @@ def warm_audio_cache() -> None:
         w_msg = format_failure_message(WRONG_ANSWER_TEMPLATE, r["answer"])
         if w_msg not in phrases:
             phrases.append(w_msg)
+        g_msg = format_failure_message(GIVE_UP_ANSWER_TEMPLATE, r["answer"])
+        if g_msg not in phrases:
+            phrases.append(g_msg)
         s_msg = format_failure_message(SILENT_ANSWER_TEMPLATE, r["answer"])
         if s_msg not in phrases:
             phrases.append(s_msg)
@@ -746,81 +862,304 @@ def speak(text: str) -> None:
         print(f"Error in audio playback: {e}")
 
 
+# --- Robust Phonetic & Pun Answer Matching Engine ---
+PUN_EQUIVALENTS = {
+    'sandwich': ['sand witch', 'sandwitch', 'sandwich', 'sandwiches'],
+    'sand witch': ['sand witch', 'sandwitch', 'sandwich', 'sandwiches'],
+    'ice cream': ['i scream', 'iscream', 'ice cream', 'icecream'],
+    'i scream': ['i scream', 'iscream', 'ice cream', 'icecream'],
+    'coffin': ['coughing', 'cough', 'coughs', 'coffin'],
+    'coughing': ['coughing', 'cough', 'coughs', 'coffin'],
+    'rap': ['wrap', 'wrapped', 'rap music', 'wrap music', 'rap'],
+    'wrap': ['wrap', 'wrapped', 'rap music', 'wrap music', 'rap'],
+    'nobody': ['no body', 'nobody', 'no-body', 'body'],
+    'no body': ['no body', 'nobody', 'no-body', 'body'],
+    'frostbite': ['frost bite', 'frostbite', 'frost'],
+    'frost bite': ['frost bite', 'frostbite', 'frost'],
+    'website': ['web site', 'website', 'web'],
+    'web site': ['web site', 'website', 'web'],
+    'boots': ['boo-ts', 'boots'],
+    'boo-ts': ['boo-ts', 'boots'],
+    'galoshes': ['ghoul-oshes', 'ghouloshes', 'galoshes'],
+    'ghoul-oshes': ['ghoul-oshes', 'ghouloshes', 'galoshes'],
+    'ghouloshes': ['ghoul-oshes', 'ghouloshes', 'galoshes'],
+    'cut it out': ['cut it out'],
+    'see through': ['see through', 'transparent', 'see right through'],
+    'dry witch': ['dry witch', 'sandwich', 'sand witch'],
+    'trombone': ['trom bone', 'trombone', 'bone'],
+    'girlfriend': ['ghoulfriend', 'ghoul friend', 'girlfriend', 'girl friend'],
+    'ghoulfriend': ['ghoulfriend', 'ghoul friend', 'girlfriend', 'girl friend'],
+    'grim reaper': ['grim sweeper', 'sweeper', 'grim reaper'],
+    'grim sweeper': ['grim sweeper', 'sweeper', 'grim reaper'],
+    'hair spray': ['scare spray', 'hair spray', 'hairspray'],
+    'scare spray': ['scare spray', 'hair spray', 'hairspray'],
+    'hide and seek': ['hide and shriek', 'hide and seek'],
+    'hide and shriek': ['hide and shriek', 'hide and seek'],
+    'post office': ['ghost office', 'post office'],
+    'ghost office': ['ghost office', 'post office'],
+    'hang out': ['hang around', 'hanging around', 'hang out', 'hanging out'],
+    'hang around': ['hang around', 'hanging around', 'hang out', 'hanging out'],
+    'nectarine': ['neck tarine', 'necktarine', 'nectarine'],
+    'neck tarine': ['neck tarine', 'necktarine', 'nectarine'],
+    'plumpkin': ['plumpkin', 'plump pumpkin', 'plump', 'pumpkin'],
+    'plump kin': ['plumpkin', 'plump pumpkin', 'plump', 'pumpkin'],
+    'horoscope': ['horror scope', 'horrorscope', 'horoscope'],
+    'horror scope': ['horror scope', 'horrorscope', 'horoscope'],
+    'transparent': ['trans parents', 'transparents', 'transparent', 'parents'],
+    'trans parents': ['trans parents', 'transparents', 'transparent', 'parents'],
+    'blueberries': ['boo berries', 'booberries', 'blueberries', 'blueberry'],
+    'boo berries': ['boo berries', 'booberries', 'blueberries', 'blueberry'],
+    'booberries': ['boo berries', 'booberries', 'blueberries', 'blueberry'],
+    'cough drops': ['coffin drops', 'cough drops', 'cough drop', 'coffin drop'],
+    'coffin drops': ['coffin drops', 'cough drops', 'cough drop', 'coffin drop'],
+    'badminton': ['batminton', 'bat minton', 'badminton'],
+    'batminton': ['batminton', 'bat minton', 'badminton'],
+    'boomerang': ['boo meringue', 'boomeringue', 'meringue', 'boomerang', 'boomerange'],
+    'boo meringue': ['boo meringue', 'boomeringue', 'meringue', 'boomerang', 'boomerange'],
+    'bad breath': ['bat breath', 'bad breath'],
+    'bat breath': ['bat breath', 'bad breath'],
+    'girl scout': ['ghoul scout', 'girl scout'],
+    'ghoul scout': ['ghoul scout', 'girl scout'],
+    'jack o lantern': ['jack o lantern', 'jackolantern', 'pumpkin'],
+    'jackolantern': ['jack o lantern', 'jackolantern', 'pumpkin'],
+    'vampire': ['vampire', 'dracula'],
+    'skeleton': ['skeleton', 'bones'],
+    'skull': ['skull', 'bones'],
+    'coin': ['coin', 'money', 'penny', 'cent'],
+}
+
+STOP_WORDS = {
+    'a', 'an', 'the', 'he', 'she', 'it', 'they', 'we', 'i', 'you',
+    'is', 'was', 'are', 'were', 'be', 'been', 'being',
+    'to', 'of', 'for', 'at', 'by', 'from', 'with', 'in', 'on',
+    'his', 'her', 'their', 'my', 'its', 'our', 'your',
+    'because', 'all', 'just', 'that', 'this', 'and', 'or', 'but',
+    'have', 'had', 'has', 'did', 'do', 'does', 'not', 'dont', 'go',
+    'out', 'up', 'down', 'so', 'as', 'no'
+}
+
+GIVE_UP_PATTERNS = [
+    r'\b(?:i\s+)?(?:do\s+not|don[\'t\s]*t|dont)\s+know\b',
+    r'\bno\s+idea\b',
+    r'\bnot\s+sure\b',
+    r'\bdunno\b',
+    r'\bi\s+give\s+up\b',
+    r'\bgive\s+up\b',
+    r'\bpass\b',
+    r'\btrick\s+or\s+treat\b',
+    r'\bwhat\b',
+    r'\bhuh\b',
+    r'\bcandy\b',
+    r'\bhappy\s+halloween\b',
+]
+
+
+def clean_text_for_matching(text: str) -> str:
+    """Normalize text by stripping quotes, markdown asterisks, and excessive punctuation."""
+    t = text.lower()
+    t = re.sub(r'[*_\"\'“”‘’`]', '', t)
+    t = re.sub(r'[^a-z0-9\s-]', ' ', t)
+    t = re.sub(r'\s+', ' ', t)
+    return t.strip()
+
+
+def is_give_up_answer(kid_answer: str) -> bool:
+    """
+    Check if the child's spoken response is an "I don't know", "give up", or filler phrase
+    without containing an actual riddle answer guess.
+    """
+    clean_k = clean_text_for_matching(kid_answer)
+    if not clean_k:
+        return False
+
+    for pat in GIVE_UP_PATTERNS:
+        if re.search(pat, clean_k):
+            words = [
+                w for w in re.findall(r'[a-z0-9]+', clean_k)
+                if w not in STOP_WORDS and w not in {
+                    'know', 'idea', 'give', 'up', 'sure', 'dunno', 'trick', 'treat',
+                    'pass', 'candy', 'happy', 'halloween', 'what', 'huh', 'please'
+                }
+            ]
+            if not words:
+                return True
+    return False
+
+
+def check_answer_match(expected: str, kid: str) -> bool:
+    """
+    Determine whether a child's spoken transcription matches the expected riddle answer
+    via phonetic pun normalization, compact matching, and whole-word fuzzy token analysis.
+    """
+    clean_k = clean_text_for_matching(kid)
+    clean_e = clean_text_for_matching(expected)
+    if not clean_k or not clean_e:
+        return False
+
+    # 1. Fast check for give-up or filler phrases
+    if is_give_up_answer(kid):
+        return False
+
+    # 2. Build target phrase set with pun and sound-alike variants
+    target_phrases = set()
+    e_no_hyphen = clean_e.replace('-', ' ')
+    e_compact = clean_e.replace('-', '').replace(' ', '')
+    k_compact = clean_k.replace('-', '').replace(' ', '')
+
+    target_phrases.add(clean_e)
+    target_phrases.add(e_no_hyphen)
+
+    for k, v in PUN_EQUIVALENTS.items():
+        k_clean = clean_text_for_matching(k)
+        if k_clean in clean_e or k_clean in e_no_hyphen or k_clean.replace('-', '').replace(' ', '') in e_compact:
+            for alt in v:
+                target_phrases.add(clean_text_for_matching(alt))
+                target_phrases.add(clean_text_for_matching(alt).replace('-', ' '))
+
+    # 3. Compact string match (e.g., 'frostbite' vs 'frost bite', 'nobody' vs 'no body')
+    for phrase in target_phrases:
+        p_compact = phrase.replace('-', '').replace(' ', '')
+        if len(p_compact) >= 4 and p_compact in k_compact:
+            return True
+
+    # 4. Whole-phrase regex match in spoken answer
+    for phrase in target_phrases:
+        if len(phrase) >= 3:
+            pattern = r'\b' + re.escape(phrase) + r'\b'
+            if re.search(pattern, clean_k) or re.search(pattern, clean_k.replace('-', ' ')):
+                return True
+
+    # 5. Significant word token overlap & fuzzy matching
+    e_words = [
+        w for w in re.findall(r'[a-z0-9]+', clean_e.replace('-', ' ') + ' ' + clean_e.replace('-', ''))
+        if w not in STOP_WORDS
+    ]
+    k_words = [
+        w for w in re.findall(r'[a-z0-9]+', clean_k.replace('-', ' ') + ' ' + clean_k.replace('-', ''))
+        if w not in STOP_WORDS
+    ]
+
+    expanded_e_words = set(e_words)
+    for phrase in target_phrases:
+        for w in re.findall(r'[a-z0-9]+', phrase.replace('-', ' ') + ' ' + phrase.replace('-', '')):
+            if w not in STOP_WORDS:
+                expanded_e_words.add(w)
+
+    for kw in k_words:
+        if kw in expanded_e_words:
+            return True
+        for ew in expanded_e_words:
+            if len(ew) >= 4 and len(kw) >= 4:
+                if difflib.SequenceMatcher(None, kw, ew).ratio() >= 0.82:
+                    return True
+
+    return False
+
+
+def evaluate_trick_or_treater_answer(riddle_question: str, riddle_answer: str, kid_answer: str) -> bool:
+    """
+    Intelligently evaluate trick-or-treater riddle answers using multi-tier matching:
+      1. Give-up / filler phrase detection (e.g., 'I don't know', 'trick or treat' -> False).
+      2. Fast phonetic & pun matching (handles puns, homophones, compound words, and sound-alikes).
+      3. Strict LLM evaluation via Ollama fallback (temperature 0.0 with fail-safe parsing).
+    """
+    # 1. Immediate rejection of give-up phrases
+    if is_give_up_answer(kid_answer):
+        print(f"Result: Child gave up or spoke filler: '{kid_answer}'")
+        return False
+
+    # 2. Rule-based Phonetic & Pun Matching
+    if check_answer_match(riddle_answer, kid_answer):
+        print(f"Result: Match found via pun/keyword engine ('{kid_answer}' -> '{riddle_answer}')")
+        return True
+
+    # 3. Fallback to Ollama for nuanced answers
+    if ollama_client:
+        eval_prompt = (
+            f"You are evaluating a child's spoken answer to a Halloween riddle.\n"
+            f"Riddle: \"{riddle_question}\"\n"
+            f"Expected Answer: \"{riddle_answer}\"\n"
+            f"Child's Spoken Answer: \"{kid_answer}\"\n\n"
+            f"Task: Determine if the child's answer is correct, a plausible synonym, or the pun punchline.\n"
+            f"Rules:\n"
+            f"- If the child said an unrelated word (e.g. \"banana\", \"car\", \"apple\") or gave up, answer INCORRECT.\n"
+            f"- If the child understood the riddle or gave the correct punchline, answer CORRECT.\n"
+            f"Reply with ONLY the word CORRECT or INCORRECT."
+        )
+        try:
+            eval_response = ollama_client.generate(model=MODEL, prompt=eval_prompt, options={"temperature": 0.0})
+            raw_eval = eval_response.get("response", "").strip()
+            first_line = raw_eval.split("\n")[0].strip().upper()
+            is_correct = "CORRECT" in first_line and "INCORRECT" not in first_line
+            print(f"Ollama judgment: {first_line} -> {'CORRECT' if is_correct else 'WRONG'}")
+            return is_correct
+        except Exception as e:
+            print(f"Notice: Ollama evaluation error: {e}")
+
+    return False
+
+
 def interact() -> None:
     """
     Execute the interactive trick-or-treat state machine when motion is triggered.
 
     Interaction Workflow:
       0. Motion Awakening Stinger: Plays the crypt gate grinding / awakening sound effect.
-      1. Riddle Generation & Speech: Prompts Ollama to generate a short, kid-friendly
-         Halloween riddle and speaks it aloud accompanied by a gothic bell chime.
-      2. Calibrated Speech Capture: Calibrates background noise, opens the microphone,
-         records the child's response, applies volume normalization, and transcribes
-         using Whisper with riddle-context priming.
-      3. Intelligent Evaluation & Reward: Evaluates the guess with playful leniency via
-         Ollama, playing a magical chime and granting candy for correct answers, or
-         playing a dungeon fail gong for wrong answers.
-
-    Returns:
-        None
-
-    Example:
-        >>> # Invoked automatically when OpenCV motion contour exceeds MOTION_THRESHOLD
-        >>> interact()
+      1. Spooky Halloween Greeting: Greets the trick-or-treater with a random Halloween welcome.
+      2. Riddle Announcement: Announces the riddle from riddles.txt accompanied by gothic bells.
+      3. Seamless Speech Capture: Opens the microphone immediately after the riddle question finishes,
+         recording the child's response with zero awkward delay.
+      4. Accurate Evaluation & Reward: Accurately evaluates the response using the pun and phonetic
+         engine, playing a winning chime and awarding sweets for correct answers, or playfully
+         revealing the answer and awarding sweets for their scary costume.
     """
     # 0. Motion Awakening Stinger
     if ENABLE_SOUND_EFFECTS and play_sound_effect and FX_MOTION_DETECTED:
         play_sound_effect(FX_MOTION_DETECTED, pulse_server=PULSE_SERVER, audio_output_device=AUDIO_OUTPUT_DEVICE, wait=True)
 
-    # 1. Select and Ask Riddle from riddles.txt
+    # 1. Spooky Halloween Skeleton Greeting
+    greeting = get_next_greeting()
+    print(f"\n💀 Skeleton Greeting: {greeting}")
+    speak(greeting)
+
+    # 2. Select and Ask Riddle from riddles.txt
     riddle_item = get_next_riddle()
     riddle_question = riddle_item["question"]
     riddle_answer = riddle_item["answer"]
 
-    print(f"\nRiddle: {riddle_question}")
+    print(f"\n🦴 Skeleton Riddle: {riddle_question}")
     print(f"Expected Answer: {riddle_answer}")
     if ENABLE_SOUND_EFFECTS and play_sound_effect and FX_RIDDLE_INTRO:
         play_sound_effect(FX_RIDDLE_INTRO, pulse_server=PULSE_SERVER, audio_output_device=AUDIO_OUTPUT_DEVICE, wait=True)
     speak(riddle_question)
 
-    # 2. Listen for Trick-or-Treater Answer
-    speak("I am listening. What is your answer?")
-    time.sleep(PRE_LISTEN_DELAY)  # Allow speaker audio to finish completely before opening mic
-    print("Listening for answer...")
+    # 3. Immediately Listen for Answer (seamless transition, no intermediate speech delay)
+    if PRE_LISTEN_DELAY > 0:
+        time.sleep(PRE_LISTEN_DELAY)
+
+    print("🎤 Listening for answer...")
     kid_answer = ""
 
-    mic_idx = int(MIC_DEVICE_INDEX) if (MIC_DEVICE_INDEX and MIC_DEVICE_INDEX.isdigit()) else None
-    mic_device_name = "System Default"
-    if mic_idx is None:
-        mic_idx, mic_device_name = find_microphone_index(AUDIO_INPUT_DEVICE)
-    elif sr:
-        with suppress_c_stderr():
-            names = sr.Microphone.list_microphone_names()
-            if 0 <= mic_idx < len(names):
-                mic_device_name = names[mic_idx]
-
+    mic_idx = _cached_mic_idx
     if mic_idx is not None:
-        print(f"Microphone: [{mic_idx}] {mic_device_name}")
+        print(f"Microphone: [{mic_idx}] {_cached_mic_name}")
 
     with suppress_c_stderr():
         mic_context = sr.Microphone(device_index=mic_idx)
         with mic_context as source:
-            if AMBIENT_NOISE_DURATION > 0:
-                recognizer.adjust_for_ambient_noise(source, duration=AMBIENT_NOISE_DURATION)
-                # Clamp energy threshold so room echo or background noise cannot make the mic deaf
+            if not _mic_calibrated and AMBIENT_NOISE_DURATION > 0:
+                recognizer.adjust_for_ambient_noise(source, duration=min(AMBIENT_NOISE_DURATION, 0.3))
                 if ENERGY_THRESHOLD > 0:
                     recognizer.energy_threshold = min(max(recognizer.energy_threshold, 150), max(ENERGY_THRESHOLD, 600))
                 else:
                     recognizer.energy_threshold = min(recognizer.energy_threshold, 600)
-            elif ENERGY_THRESHOLD > 0:
-                recognizer.energy_threshold = ENERGY_THRESHOLD
 
             recognizer.dynamic_energy_threshold = DYNAMIC_ENERGY_THRESHOLD
             recognizer.pause_threshold = PAUSE_THRESHOLD
             recognizer.phrase_threshold = 0.2  # Trigger promptly on short kid answers
             recognizer.non_speaking_duration = 0.6
 
-            print(f"Calibrated sensitivity (energy threshold: {int(recognizer.energy_threshold)}). Speak now!")
+            print(f"Ready (energy threshold: {int(recognizer.energy_threshold)}). Speak now!")
             try:
                 audio = recognizer.listen(source, timeout=LISTEN_TIMEOUT, phrase_time_limit=LISTEN_PHRASE_TIME_LIMIT)
                 with open("temp_mic.wav", "wb") as f:
@@ -866,7 +1205,7 @@ def interact() -> None:
             except Exception as e:
                 print(f"Microphone error: {e}")
 
-    # 3. Evaluate Trick-or-Treater Answer
+    # 4. Evaluate Trick-or-Treater Answer
     if not kid_answer:
         print("Child did not speak in time.")
         if ENABLE_SOUND_EFFECTS and play_sound_effect and FX_SILENT_ANSWER:
@@ -876,41 +1215,15 @@ def interact() -> None:
         return
 
     print(f"Evaluating answer: '{kid_answer}' (Target: '{riddle_answer}')...")
+    if is_give_up_answer(kid_answer):
+        print(f"Result: GIVE UP ('{kid_answer}'). Revealing answer '{riddle_answer}' with custom give-up response.")
+        if ENABLE_SOUND_EFFECTS and play_sound_effect and FX_WRONG_ANSWER:
+            play_sound_effect(FX_WRONG_ANSWER, pulse_server=PULSE_SERVER, audio_output_device=AUDIO_OUTPUT_DEVICE, wait=True)
+        give_up_msg = format_failure_message(GIVE_UP_ANSWER_TEMPLATE, riddle_answer)
+        speak(give_up_msg)
+        return
 
-    # 1. Fast Phonetic & Sound-Alike Matching (e.g., Boo-meringue -> boomerang, sand-witch -> sandwich)
-    clean_k = re.sub(r'[^\w\s]', '', kid_answer.lower()).strip()
-    clean_e = re.sub(r'[^\w\s]', '', riddle_answer.lower()).strip()
-    clean_k = re.sub(r'^(?:a|an|the)\s+', '', clean_k).replace(' ', '')
-    clean_e = re.sub(r'^(?:a|an|the)\s+', '', clean_e).replace(' ', '')
-
-    is_correct = False
-    if clean_e and clean_k and (clean_e in clean_k or clean_k in clean_e):
-        is_correct = True
-    elif clean_e and clean_k:
-        sim_ratio = difflib.SequenceMatcher(None, clean_k, clean_e).ratio()
-        if sim_ratio >= 0.72:
-            is_correct = True
-
-    # 2. LLM evaluation via Ollama if not already resolved
-    if not is_correct and ollama_client:
-        eval_prompt = (
-            f"You are a fun Halloween gargoyle judging a child's spoken answer to this riddle.\n"
-            f"Riddle: '{riddle_question}'\n"
-            f"Expected Answer: '{riddle_answer}'\n"
-            f"Child's spoken answer (transcribed via speech-to-text): '{kid_answer}'\n\n"
-            f"Evaluation Rules:\n"
-            f"1. Many Halloween riddles are puns or sound-alikes (e.g. 'Boo-meringue' sounds like 'boomerang', 'sand-witch' sounds like 'sandwich', 'I-scream' sounds like 'ice cream', 'coffin' sounds like 'coughing', 'Booberries' sounds like 'blueberries').\n"
-            f"2. Speech-to-text frequently transcribes phonetic puns as standard dictionary words (e.g., saying 'boo-meringue' gets transcribed as 'boomerang').\n"
-            f"3. Accept answers that sound phonetically similar, rhyming, pun-based, or share the core punchline.\n"
-            f"4. Be generous with child approximations and kid logic.\n"
-            f"5. Only reply FALSE if the answer is completely wrong, unrelated, or silence.\n\n"
-            f"Reply with ONLY the word TRUE or FALSE."
-        )
-        try:
-            eval_response = ollama_client.generate(model=MODEL, prompt=eval_prompt)
-            is_correct = "TRUE" in eval_response['response'].upper()
-        except Exception as e:
-            print(f"Error evaluating answer with Ollama: {e}")
+    is_correct = evaluate_trick_or_treater_answer(riddle_question, riddle_answer, kid_answer)
 
     if is_correct:
         print("Result: CORRECT! Sweet earned.")
@@ -923,6 +1236,53 @@ def interact() -> None:
             play_sound_effect(FX_WRONG_ANSWER, pulse_server=PULSE_SERVER, audio_output_device=AUDIO_OUTPUT_DEVICE, wait=True)
         wrong_msg = format_failure_message(WRONG_ANSWER_TEMPLATE, riddle_answer)
         speak(wrong_msg)
+
+
+def save_detected_frames(frame1, frame2, contours, max_area: float) -> Optional[Path]:
+    """
+    Save a side-by-side comparison screenshot (and individual frames) of the two frames
+    (frame1 and frame2) that were compared and exceeded MOTION_THRESHOLD.
+    """
+    if not SAVE_DETECTED_FRAMES or cv2 is None or np is None or frame1 is None or frame2 is None:
+        return None
+    try:
+        DETECTED_FRAMES_DIR.mkdir(parents=True, exist_ok=True)
+        f1_vis = frame1.copy()
+        f2_vis = frame2.copy()
+
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area >= MOTION_THRESHOLD:
+                x, y, w, h = cv2.boundingRect(contour)
+                cv2.rectangle(f1_vis, (x, y), (x + w, y + h), (0, 165, 255), 2)
+                cv2.rectangle(f2_vis, (x, y), (x + w, y + h), (0, 255, 0), 2)
+
+        variance = max_area - MOTION_THRESHOLD
+        ts_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        file_ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+
+        cv2.putText(f1_vis, f"Frame 1 (Before) | {ts_str}", (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 3, cv2.LINE_AA)
+        cv2.putText(f1_vis, f"Frame 1 (Before) | {ts_str}", (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 1, cv2.LINE_AA)
+
+        label2 = f"Frame 2 (Trigger) | Peak: {int(max_area)}px | Thresh: {MOTION_THRESHOLD}px | Var: +{int(variance)}px"
+        cv2.putText(f2_vis, label2, (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 3, cv2.LINE_AA)
+        cv2.putText(f2_vis, label2, (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 1, cv2.LINE_AA)
+
+        comparison = np.hstack((f1_vis, f2_vis))
+        pair_path = DETECTED_FRAMES_DIR / f"motion_{file_ts}_{int(max_area)}px_pair.jpg"
+        f1_path = DETECTED_FRAMES_DIR / f"motion_{file_ts}_{int(max_area)}px_frame1.jpg"
+        f2_path = DETECTED_FRAMES_DIR / f"motion_{file_ts}_{int(max_area)}px_frame2.jpg"
+        latest_path = DETECTED_FRAMES_DIR / "latest_motion_pair.jpg"
+
+        cv2.imwrite(str(pair_path), comparison)
+        cv2.imwrite(str(f1_path), frame1)
+        cv2.imwrite(str(f2_path), frame2)
+        cv2.imwrite(str(latest_path), comparison)
+        print(f"📸 Saved motion comparison frames: {pair_path} (and raw frame1/frame2)")
+        return pair_path
+    except Exception as e:
+        print(f"Notice: Could not save detected frames screenshot: {e}")
+        return None
 
 
 def open_camera(target) -> cv2.VideoCapture:
@@ -989,8 +1349,9 @@ def main() -> None:
         cap.release()
         return
     
-    print("Watching the door (Headless Mode)... Press Ctrl+C to stop.")
-    
+    print(f"Watching the door (Headless Mode, threshold: {MOTION_THRESHOLD})... Press Ctrl+C to stop.")
+    last_variance_log = time.time()
+
     try:
         while cap.isOpened():
             # Calculate absolute pixel difference between consecutive video frames
@@ -1001,14 +1362,34 @@ def main() -> None:
             dilated = cv2.dilate(thresh, None, iterations=3)
             contours, _ = cv2.findContours(dilated, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
+            max_contour_area = 0.0
             motion_detected = False
             for contour in contours:
-                if cv2.contourArea(contour) >= MOTION_THRESHOLD:
+                area = cv2.contourArea(contour)
+                if area > max_contour_area:
+                    max_contour_area = area
+                if area >= MOTION_THRESHOLD:
                     motion_detected = True
-                    break
+
+            variance = max_contour_area - MOTION_THRESHOLD
+            now = time.time()
+            if MOTION_LOG_INTERVAL > 0 and max_contour_area > 0 and (now - last_variance_log) >= MOTION_LOG_INTERVAL and not motion_detected:
+                pct = (max_contour_area / MOTION_THRESHOLD) * 100.0 if MOTION_THRESHOLD > 0 else 0.0
+                print(
+                    f"[Motion Variance] Peak Area: {int(max_contour_area)} px | "
+                    f"Threshold: {MOTION_THRESHOLD} px | "
+                    f"Variance: {int(variance):+d} px ({pct:.1f}%)"
+                )
+                last_variance_log = now
 
             if motion_detected:
-                print("\n[MOTION DETECTED]")
+                pct = (max_contour_area / MOTION_THRESHOLD) * 100.0 if MOTION_THRESHOLD > 0 else 0.0
+                print(
+                    f"\n[MOTION DETECTED] Peak Area: {int(max_contour_area)} px | "
+                    f"Threshold: {MOTION_THRESHOLD} px | "
+                    f"Variance: +{int(variance)} px ({pct:.1f}% of threshold)"
+                )
+                save_detected_frames(frame1, frame2, contours, max_contour_area)
                 interact()
 
                 print(f"Cooldown for {MOTION_COOLDOWN} seconds...")

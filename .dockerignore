@@ -16,3 +16,4 @@ venv/
 audio_cache/
 cache/
 scratch/
+detected_frames/

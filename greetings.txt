@@ -1,0 +1,14 @@
+# 💀 Halloween Skeleton Greetings Pool
+# Add one greeting per line. The doorcam skeleton sentinel will randomly pick
+# from this deck without repeating until all greetings have been played.
+
+Clickity-clack! Welcome, foolish mortals, to my haunted boneyard! Answer this skeleton's riddle if you dare!
+Rattle, rattle! Halt! Who goes there? Before you take a sweet, you must solve my spooky skeleton riddle!
+Happy Halloween, brave trick-or-treaters! Answer my bony riddle, and the candy is yours!
+Clack, clack, clack! Welcome to my crypt, little monsters! Let us see if you can solve this skeleton's Halloween riddle!
+Greetings, creatures of the night! My old bones are rattling for a puzzle... heed my riddle!
+Well shiver my ribs! Fresh souls approach! Solve my riddle if you wish to taste the candy within!
+Welcome, ghosts and ghouls! Do not trip over my funny bone! Listen closely to my riddle to earn your sweet reward!
+Who dares rattle the skeleton guardian of the treat bowl? Answer my riddle to pass!
+Happy Halloween, wanderers of the dark! Answer this old skeleton's riddle, or face a frightful trick!
+Beware, little goblins! Solve the riddle inside my hollow skull, and sweet treasures shall be yours!
